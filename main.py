@@ -5,6 +5,7 @@ import time
 from engine.runner import BenchmarkRunner
 from engine.llm_judge import LLMJudge
 from agent.main_agent import MainAgent
+from engine.llm_judge import LLMJudge
 
 
 async def run_benchmark_with_results(agent_version: str):
