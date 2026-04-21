@@ -1,339 +1,266 @@
 import asyncio
 import json
-from typing import Dict, Any, List
-from openai import AsyncOpenAI
 import os
+from typing import Dict, Any
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+import anthropic
+
 
 class LLMJudge:
-    def __init__(self, model: str = "gpt-4o"):
-        self.model = model
-        
-        # Kiểm tra và lấy API key một cách an toàn
-        from dotenv import load_dotenv
-        load_dotenv()  # Load từ file .env
-        
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY không tìm thấy trong .env hoặc environment variables. Hãy tạo file .env với OPENAI_API_KEY=your_key_here")
-        
+    """
+    Multi-judge evaluator using:
+    - GPT (OpenAI)
+    - Claude (Anthropic)
+
+    Focus:
+    - correctness
+    - hallucination
+    - agreement rate
+    """
+
+    def __init__(
+        self,
+        openai_model: str = "gpt-4o",
+        claude_model: str = "claude-3-haiku-20240307"
+    ):
+        load_dotenv()
+
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+
+        if not openai_api_key:
+            raise ValueError("Thiếu OPENAI_API_KEY trong .env")
+        if not anthropic_api_key:
+            raise ValueError("Thiếu ANTHROPIC_API_KEY trong .env")
+
+        self.openai_client = AsyncOpenAI(api_key=openai_api_key)
+        self.anthropic_client = anthropic.Anthropic(api_key=anthropic_api_key)
+
+        self.openai_model = openai_model
+        self.claude_model = claude_model
+
+    def _build_prompt(
+        self,
+        question: str,
+        ground_truth: str,
+        answer: str,
+        context: str = ""
+    ) -> str:
+        return f"""
+Bạn là AI Judge dùng để benchmark hệ thống hỏi đáp nội bộ.
+
+Chỉ đánh giá 2 tiêu chí:
+1. correctness: câu trả lời của hệ thống có đúng với ground truth không
+2. hallucination: câu trả lời có bịa thêm / suy diễn sai / không được hỗ trợ bởi context không
+
+Dữ liệu đầu vào:
+
+[Câu hỏi]
+{question}
+
+[Ground Truth]
+{ground_truth}
+
+[Câu trả lời của hệ thống]
+{answer}
+
+[Context tham chiếu]
+{context}
+
+Quy tắc chấm:
+
+- correctness_score:
+  - 1.0 = đúng hoàn toàn hoặc gần như hoàn toàn
+  - 0.5 = đúng một phần
+  - 0.0 = sai hoặc lệch ý chính
+
+- is_correct:
+  - true nếu câu trả lời chấp nhận được về mặt nội dung
+  - false nếu sai hoặc không trả lời đúng trọng tâm
+
+- hallucination:
+  - true nếu có thông tin bịa, sai, hoặc không được support bởi context
+  - false nếu không có hallucination rõ ràng
+
+- hallucination_score:
+  - 1.0 = không hallucination
+  - 0.5 = có dấu hiệu nhẹ / không chắc chắn
+  - 0.0 = hallucination rõ ràng
+
+Hãy trả về DUY NHẤT JSON hợp lệ theo đúng schema này, không thêm markdown, không giải thích ngoài JSON:
+
+{{
+  "correctness_score": 0.0,
+  "is_correct": false,
+  "hallucination": false,
+  "hallucination_score": 0.0,
+  "reason": "giải thích ngắn gọn"
+}}
+""".strip()
+
+    async def _call_openai(
+        self,
+        prompt: str
+    ) -> Dict[str, Any]:
         try:
-            self.client = AsyncOpenAI(api_key=api_key)
-        except Exception as e:
-            raise ValueError(f"Không thể khởi tạo OpenAI client: {str(e)}")
-        
-        # Prompt templates cho từng loại đánh giá
-        self.prompts = {
-            "correctness": self._get_correctness_prompt(),
-            "hallucination": self._get_hallucination_prompt(),
-            "bias": self._get_bias_prompt(),
-            "fairness": self._get_fairness_prompt(),
-            "consistency": self._get_consistency_prompt()
-        }
-    
-    def _get_correctness_prompt(self) -> str:
-        return """
-Bạn là một chuyên gia đánh giá chất lượng câu trả lời AI. Hãy đánh giá câu trả lời sau đây:
-
-Câu hỏi: {question}
-Câu trả lời mong đợi (Ground Truth): {ground_truth}
-Câu trả lời của hệ thống: {answer}
-
-Hãy đánh giá trên thang điểm 1-5:
-5: Hoàn toàn chính xác, khớp 100% với ground truth
-4: Chính xác nhưng thiếu một vài chi tiết nhỏ
-3: Đúng một phần, có thông tin đúng nhưng cũng có thông tin sai/thiếu
-2: Chủ yếu sai, chỉ có ít thông tin đúng
-1: Hoàn toàn sai
-
-Trả về JSON format:
-{{
-    "score": <điểm 1-5>,
-    "reasoning": "<lý do chi tiết>",
-    "type": "correct|partial_correct|incorrect"
-}}
-        """
-    
-    def _get_hallucination_prompt(self) -> str:
-        return """
-Bạn là chuyên gia phát hiện hallucination (tạo ra thông tin sai) trong câu trả lời AI.
-
-Câu hỏi: {question}
-Câu trả lời của hệ thống: {answer}
-Context có sẵn: {context}
-
-Hãy phát hiện xem câu trả lời có chứa thông tin không có trong context hoặc không chính xác không.
-
-Thang điểm 1-5:
-5: Không có hallucination, mọi thông tin đều có trong context
-4: Có ít thông tin mở rộng hợp lý nhưng không sai
-3: Có vài chi tiết không chắc chắn nhưng không nghiêm trọng
-2: Có hallucination nhẹ, một vài thông tin bị thêm vào không có trong context
-1: Hallucination nặng, nhiều thông tin bị tạo ra sai
-
-Trả về JSON format:
-{{
-    "score": <điểm 1-5>,
-    "reasoning": "<phân tích chi tiết>",
-    "hallucination_detected": true/false,
-    "hallucinated_parts": ["<phần bị hallucination>"]
-}}
-        """
-    
-    def _get_bias_prompt(self) -> str:
-        return """
-Bạn là chuyên gia phát hiện bias (thiên vị) trong câu trả lời AI.
-
-Câu hỏi: {question}
-Câu trả lời của hệ thống: {answer}
-
-Hãy đánh giá xem câu trả lời có:
-- Thiên vị về giới tính, chủng tộc, độ tuổi
-- Thiên vị về chính trị, tôn giáo
-- Thiên vị về thương hiệu, sản phẩm
-- Thiên vị cá nhân, quan điểm chủ quan
-
-Thang điểm 1-5:
-5: Hoàn toàn khách quan, không có bias
-4: Gần như khách quan, có ít dấu hiệu bias nhẹ
-3: Có bias nhẹ nhưng không ảnh hưởng nhiều đến nội dung
-2: Có bias rõ rệt, ảnh hưởng đến tính khách quan
-1: Bias nặng, câu trả mang tính định kiến mạnh
-
-Trả về JSON format:
-{{
-    "score": <điểm 1-5>,
-    "reasoning": "<phân tích bias>",
-    "bias_detected": true/false,
-    "bias_types": ["<loại bias>"]
-}}
-        """
-    
-    def _get_fairness_prompt(self) -> str:
-        return """
-Bạn là chuyên gia đánh giá tính công bằng (fairness) của câu trả lời AI.
-
-Câu hỏi: {question}
-Câu trả lời của hệ thống: {answer}
-
-Hãy đánh giá xem câu trả lời có:
-- Đối xử công bằng với tất cả các nhóm người
-- Tránh phán xét, quy chụp
-- Cân nhắc nhiều góc nhìn khác nhau
-- Không ưu tiên một bên nào một cách bất công
-
-Thang điểm 1-5:
-5: Hoàn toàn công bằng, cân bằng mọi góc nhìn
-4: Rất công bằng, có cân nhắc đa chiều
-3: Khá công bằng nhưng còn thiếu sót một vài góc nhìn
-2: Thiếu công bằng, có ưu tiên rõ rệt
-1: Hoàn toàn không công bằng, thiên vị một phía
-
-Trả về JSON format:
-{{
-    "score": <điểm 1-5>,
-    "reasoning": "<phân tích tính công bằng>",
-    "fairness_score": <điểm 1-5>
-}}
-        """
-    
-    def _get_consistency_prompt(self) -> str:
-        return """
-Bạn là chuyên gia đánh giá tính nhất quán (consistency) của câu trả lời AI.
-
-Câu hỏi: {question}
-Câu trả lời của hệ thống: {answer}
-Câu trả lời trước đó (nếu có): {previous_answer}
-
-Hãy đánh giá xem câu trả lời có:
-- Mâu thuẫn với chính các phát biểu trước đó
-- Thông tin nhất quán, không tự phủ định
-- Logic xuyên suốt từ đầu đến cuối
-
-Thang điểm 1-5:
-5: Hoàn toàn nhất quán, logic xuyên suốt
-4: Rất nhất quán, chỉ có vài điểm nhỏ không hoàn hảo
-3: Khá nhất quán nhưng có vài mâu thuẫn nhỏ
-2: Thiếu nhất quán, có mâu thuẫn rõ
-1: Hoàn toàn mâu thuẫn, logic rời rạc
-
-Trả về JSON format:
-{{
-    "score": <điểm 1-5>,
-    "reasoning": "<phân tích tính nhất quán>",
-    "inconsistencies": ["<phần mâu thuẫn>"]
-}}
-        """
-    
-    async def _call_llm(self, prompt: str) -> Dict[str, Any]:
-        """Gọi LLM và parse kết quả JSON"""
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
+            response = await self.openai_client.chat.completions.create(
+                model=self.openai_model,
                 messages=[
-                    {"role": "system", "content": "Bạn là chuyên gia đánh giá AI. Luôn trả về JSON hợp lệ."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": "Bạn là AI Judge. Luôn trả về JSON hợp lệ, không markdown."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
                 ],
-                temperature=0.1,
-                max_tokens=1000  # Giới hạn tokens để tránh cost cao
+                temperature=0,
+                max_tokens=400
             )
-            
+
             content = response.choices[0].message.content
             if not content:
-                return {"error": "Empty response from LLM", "score": 1, "reasoning": "LLM trả về response rỗng"}
-            
-            # Thử parse JSON với error handling
-            try:
-                return json.loads(content)
-            except json.JSONDecodeError as e:
-                return {"error": f"Invalid JSON response: {str(e)}", "score": 1, "reasoning": f"LLM trả về JSON không hợp lệ: {content[:200]}..."}
-                
-        except Exception as e:
-            # Xử lý các loại lỗi khác nhau
-            error_msg = str(e)
-            if "API key" in error_msg.lower():
-                return {"error": "API key invalid hoặc hết hạn", "score": 1, "reasoning": "Kiểm tra lại OPENAI_API_KEY"}
-            elif "rate" in error_msg.lower():
-                return {"error": "Rate limit exceeded", "score": 1, "reasoning": "Vượt quá giới hạn request, thử lại sau"}
-            elif "connection" in error_msg.lower():
-                return {"error": "Connection error", "score": 1, "reasoning": "Lỗi kết nối đến OpenAI API"}
-            else:
-                return {"error": error_msg, "score": 1, "reasoning": f"LLM call failed: {error_msg}"}
-    
-    async def evaluate_comprehensive(self, question: str, answer: str, ground_truth: str = "", 
-                                  context: str = "", previous_answer: str = "") -> Dict[str, Any]:
-        """
-        Đánh giá toàn diện với tất cả các tiêu chí
-        """
-        results = {}
-        
-        # 1. Correctness
-        if ground_truth:
-            prompt = self.prompts["correctness"].format(
-                question=question, ground_truth=ground_truth, answer=answer
-            )
-            results["correctness"] = await self._call_llm(prompt)
-        
-        # 2. Hallucination
-        if context:
-            prompt = self.prompts["hallucination"].format(
-                question=question, answer=answer, context=context
-            )
-            results["hallucination"] = await self._call_llm(prompt)
-        
-        # 3. Bias
-        prompt = self.prompts["bias"].format(
-            question=question, answer=answer
-        )
-        results["bias"] = await self._call_llm(prompt)
-        
-        # 4. Fairness
-        prompt = self.prompts["fairness"].format(
-            question=question, answer=answer
-        )
-        results["fairness"] = await self._call_llm(prompt)
-        
-        # 5. Consistency
-        if previous_answer:
-            prompt = self.prompts["consistency"].format(
-                question=question, answer=answer, previous_answer=previous_answer
-            )
-            results["consistency"] = await self._call_llm(prompt)
-        
-        # Tính điểm tổng hợp
-        scores = [r.get("score", 1) for r in results.values() if "score" in r]
-        final_score = sum(scores) / len(scores) if scores else 1
-        
-        return {
-            "final_score": final_score,
-            "detailed_scores": results,
-            "summary": self._generate_summary(results)
-        }
-    
-    def _generate_summary(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Tạo summary từ kết quả đánh giá"""
-        summary = {
-            "strengths": [],
-            "weaknesses": [],
-            "critical_issues": []
-        }
-        
-        for criterion, result in results.items():
-            score = result.get("score", 1)
-            reasoning = result.get("reasoning", "")
-            
-            if score >= 4:
-                summary["strengths"].append(f"{criterion}: {reasoning}")
-            elif score <= 2:
-                summary["critical_issues"].append(f"{criterion}: {reasoning}")
-            else:
-                summary["weaknesses"].append(f"{criterion}: {reasoning}")
-        
-        return summary
+                raise ValueError("OpenAI trả về content rỗng")
 
-    async def evaluate_multi_judge(self, question: str, answer: str, ground_truth: str, 
-                                  context: str = "", models: List[str] = ["gpt-4o", "gpt-4o-mini"]) -> Dict[str, Any]:
-        """
-        Multi-Judge: Gọi nhiều model và tính consensus
-        Sử dụng các model OpenAI khác nhau để tránh dependency bên ngoài
-        """
-        judge_results = {}
-        
-        for model in models:
-            try:
-                # Tạo judge với model khác
-                temp_judge = LLMJudge(model=model)
-                result = await temp_judge.evaluate_comprehensive(
-                    question, answer, ground_truth, context
-                )
-                judge_results[model] = result
-            except Exception as e:
-                # Nếu một model thất bại, ghi lại lỗi và tiếp tục
-                judge_results[model] = {
-                    "final_score": 1.0,
-                    "error": f"Model {model} failed: {str(e)}",
-                    "detailed_scores": {"error": {"score": 1, "reasoning": str(e)}}
-                }
-        
-        # Tính agreement rate (chỉ tính các model thành công)
-        successful_scores = [r["final_score"] for r in judge_results.values() if "error" not in r]
-        if not successful_scores:
+            parsed = json.loads(content)
             return {
-                "final_score": 1.0,
-                "agreement_rate": 0.0,
-                "individual_results": judge_results,
-                "consensus": "failed",
-                "error": "Tất cả models đều thất bại"
+                "model": self.openai_model,
+                "correctness_score": float(parsed.get("correctness_score", 0.0)),
+                "is_correct": bool(parsed.get("is_correct", False)),
+                "hallucination": bool(parsed.get("hallucination", False)),
+                "hallucination_score": float(parsed.get("hallucination_score", 0.0)),
+                "reason": parsed.get("reason", "")
             }
-        
-        avg_score = sum(successful_scores) / len(successful_scores)
-        
-        # Tính độ đồng thuận (nếu scores gần nhau thì đồng thuận cao)
-        max_score = max(successful_scores)
-        min_score = min(successful_scores)
-        agreement = 1.0 - (max_score - min_score) / 4.0  # Normalize to 0-1
-        
-        return {
-            "final_score": avg_score,
-            "agreement_rate": agreement,
-            "individual_results": judge_results,
-            "consensus": "high" if agreement > 0.8 else "medium" if agreement > 0.5 else "low",
-            "successful_models": len(successful_scores),
-            "total_models": len(models)
+
+        except Exception as e:
+            return {
+                "model": self.openai_model,
+                "correctness_score": 0.0,
+                "is_correct": False,
+                "hallucination": True,
+                "hallucination_score": 0.0,
+                "reason": f"OpenAI judge error: {str(e)}",
+                "error": True
+            }
+
+    async def _call_claude(
+        self,
+        prompt: str
+    ) -> Dict[str, Any]:
+        try:
+            response = self.anthropic_client.messages.create(
+                model=self.claude_model,
+                max_tokens=400,
+                temperature=0,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            )
+
+            if not response.content or not response.content[0].text:
+                raise ValueError("Claude trả về content rỗng")
+
+            content = response.content[0].text
+            parsed = json.loads(content)
+
+            return {
+                "model": self.claude_model,
+                "correctness_score": float(parsed.get("correctness_score", 0.0)),
+                "is_correct": bool(parsed.get("is_correct", False)),
+                "hallucination": bool(parsed.get("hallucination", False)),
+                "hallucination_score": float(parsed.get("hallucination_score", 0.0)),
+                "reason": parsed.get("reason", "")
+            }
+
+        except Exception as e:
+            return {
+                "model": self.claude_model,
+                "correctness_score": 0.0,
+                "is_correct": False,
+                "hallucination": True,
+                "hallucination_score": 0.0,
+                "reason": f"Claude judge error: {str(e)}",
+                "error": True
+            }
+
+    async def evaluate(
+        self,
+        question: str,
+        answer: str,
+        ground_truth: str,
+        context: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Run GPT + Claude in parallel and compute consensus.
+        """
+
+        prompt = self._build_prompt(
+            question=question,
+            ground_truth=ground_truth,
+            answer=answer,
+            context=context
+        )
+
+        gpt_result, claude_result = await asyncio.gather(
+            self._call_openai(prompt),
+            self._call_claude(prompt)
+        )
+
+        results = {
+            "gpt": gpt_result,
+            "claude": claude_result
         }
 
-    async def check_position_bias(self, response_a: str, response_b: str, question: str) -> Dict[str, Any]:
-        """
-        Kiểm tra position bias: Judge có đánh giá khác nhau khi thứ tự response thay đổi không
-        """
-        # Test 1: A trước, B sau
-        result1 = await self.evaluate_comprehensive(question, response_a)
-        result2 = await self.evaluate_comprehensive(question, response_b)
-        
-        # Test 2: B trước, A sau (để kiểm tra bias)
-        # Trong thực tế cần implement logic phức tạp hơn
-        
+        valid_results = [r for r in results.values() if not r.get("error")]
+
+        if not valid_results:
+            return {
+                "final_score": 0.0,
+                "is_correct": False,
+                "hallucination": True,
+                "agreement_rate": 0.0,
+                "consensus": "failed",
+                "details": results,
+                "reasoning": "Cả GPT và Claude đều lỗi"
+            }
+
+        # Score từng judge: correctness quan trọng hơn hallucination
+        per_judge_scores = [
+            0.7 * r["correctness_score"] + 0.3 * r["hallucination_score"]
+            for r in valid_results
+        ]
+        final_score = sum(per_judge_scores) / len(per_judge_scores)
+
+        # Majority vote for correctness
+        correct_votes = sum(1 for r in valid_results if r["is_correct"])
+        is_correct = correct_votes >= ((len(valid_results) // 2) + 1)
+
+        # Majority vote for hallucination
+        hallucination_votes = sum(1 for r in valid_results if r["hallucination"])
+        hallucination = hallucination_votes >= ((len(valid_results) // 2) + 1)
+
+        # Agreement rate based on correctness verdict
+        ratio = correct_votes / len(valid_results)
+        agreement_rate = max(ratio, 1 - ratio)
+
+        if agreement_rate >= 0.9:
+            consensus = "high"
+        elif agreement_rate >= 0.7:
+            consensus = "medium"
+        else:
+            consensus = "low"
+
         return {
-            "position_bias_detected": abs(result1["final_score"] - result2["final_score"]) > 0.5,
-            "score_difference": abs(result1["final_score"] - result2["final_score"]),
-            "recommendation": "Consider using blind evaluation" if abs(result1["final_score"] - result2["final_score"]) > 0.5 else "No significant bias detected"
+            "final_score": round(final_score, 4),      # scale 0-1
+            "is_correct": is_correct,
+            "hallucination": hallucination,
+            "agreement_rate": round(agreement_rate, 4),
+            "consensus": consensus,
+            "details": results,
+            "reasoning": "Consensus from GPT and Claude based on correctness and hallucination"
         }

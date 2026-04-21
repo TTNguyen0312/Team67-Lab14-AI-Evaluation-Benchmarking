@@ -1,12 +1,63 @@
 {
-  "metadata": {
-    "version": "Agent_V2_Optimized",
-    "total": 50,
-    "timestamp": "2026-04-21 16:39:22"
+  "v1": {
+    "metadata": {
+      "total": 50,
+      "version": "Agent_V1_Base",
+      "timestamp": "2026-04-21 17:53:07"
+    },
+    "metrics": {
+      "accuracy": 0.16,
+      "pass_count": 8,
+      "fail_count": 42,
+      "avg_score": 0.4031,
+      "hallucination_rate": 0.24,
+      "hit_rate": 0.5,
+      "mrr": 0.5,
+      "agreement_rate": 1.0,
+      "avg_latency": 0.0473,
+      "pass_rate": 0.16
+    }
   },
-  "metrics": {
-    "avg_score": 4.5,
-    "hit_rate": 1.0,
-    "agreement_rate": 0.8
+  "v2": {
+    "metadata": {
+      "total": 50,
+      "version": "Agent_V2_Optimized",
+      "timestamp": "2026-04-21 17:53:08"
+    },
+    "metrics": {
+      "accuracy": 0.1,
+      "pass_count": 5,
+      "fail_count": 45,
+      "avg_score": 0.4329,
+      "hallucination_rate": 0.34,
+      "hit_rate": 0.78,
+      "mrr": 0.6967,
+      "agreement_rate": 1.0,
+      "avg_latency": 0.0549,
+      "pass_rate": 0.1
+    }
+  },
+  "release_gate": {
+    "decision": "BLOCK",
+    "checks": [
+      {
+        "name": "Quality Gate",
+        "threshold": "avg_score delta >= -0.05",
+        "delta": 0.0298,
+        "passed": true
+      },
+      {
+        "name": "Retrieval Gate",
+        "threshold": "hit_rate delta >= -0.05",
+        "delta": 0.28,
+        "passed": true
+      },
+      {
+        "name": "Pass Rate Gate",
+        "threshold": "pass_rate delta >= -0.05",
+        "delta": -0.06,
+        "passed": false
+      }
+    ]
   }
 }
