@@ -40,6 +40,7 @@ class BenchmarkRunner:
             "latency": latency,
             "ragas": ragas,
             "judge": judge_result,
+            "token_usage": judge_result.get("token_usage", {}),
             "status": "pass" if judge_result["final_score"] >= 3 else "fail",
         }
 

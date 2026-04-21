@@ -9,27 +9,42 @@ try:
 except ImportError:
     AsyncAnthropic = None
 
+# USD cost per 1M tokens for each supported model
+_COST_PER_1M: Dict[str, Dict[str, float]] = {
+    "gpt-4o":      {"input": 2.50, "output": 10.00},
+    "gpt-4.1":     {"input": 2.00, "output":  8.00},
+    "gpt-4o-mini": {"input": 0.15, "output":  0.60},
+    "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00},
+}
+
+def _compute_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    rates = _COST_PER_1M.get(model, {"input": 0.0, "output": 0.0})
+    return (input_tokens * rates["input"] + output_tokens * rates["output"]) / 1_000_000
+
+
 class LLMJudge:
     def __init__(self, model: str = "gpt-4o"):
         self.model = model
-        
+        self.input_tokens = 0
+        self.output_tokens = 0
+
         # Load environment variables
         from dotenv import load_dotenv
         load_dotenv()
-        
+
         # Initialize OpenAI client
         openai_key = os.getenv("OPENAI_API_KEY")
         if not openai_key:
             raise ValueError("OPENAI_API_KEY không tìm thấy. Hãy tạo file .env với OPENAI_API_KEY=your_key_here")
         self.openai_client = AsyncOpenAI(api_key=openai_key)
-        
+
         # Initialize Anthropic client for Claude
         anthropic_key = os.getenv("ANTHROPIC_API_KEY")
         if anthropic_key and AsyncAnthropic:
             self.anthropic_client = AsyncAnthropic(api_key=anthropic_key)
         else:
             self.anthropic_client = None
-        
+
         # Prompt templates cho từng loại đánh giá
         self.prompts = {
             "correctness": self._get_correctness_prompt(),
@@ -37,6 +52,16 @@ class LLMJudge:
             "bias": self._get_bias_prompt(),
             "fairness": self._get_fairness_prompt(),
             "consistency": self._get_consistency_prompt()
+        }
+
+    def get_usage(self) -> Dict[str, Any]:
+        cost = _compute_cost(self.model, self.input_tokens, self.output_tokens)
+        return {
+            "model": self.model,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.input_tokens + self.output_tokens,
+            "cost_usd": round(cost, 6),
         }
     
     def _get_correctness_prompt(self) -> str:
@@ -187,6 +212,9 @@ Trả về JSON format:
                     temperature=0.1,
                     max_tokens=1000
                 )
+                if response.usage:
+                    self.input_tokens += response.usage.prompt_tokens
+                    self.output_tokens += response.usage.completion_tokens
                 content = response.choices[0].message.content
             elif self.model.startswith("claude") and self.anthropic_client:
                 # Anthropic models
@@ -199,6 +227,9 @@ Trả về JSON format:
                         {"role": "user", "content": prompt}
                     ]
                 )
+                if response.usage:
+                    self.input_tokens += response.usage.input_tokens
+                    self.output_tokens += response.usage.output_tokens
                 content = response.content[0].text if response.content else ""
             else:
                 return {"error": f"Model {self.model} không được hỗ trợ hoặc thiếu API key", "score": 1, "reasoning": "Kiểm tra lại model và API keys"}
@@ -308,24 +339,33 @@ Trả về JSON format:
         Multi-Judge: Gói nhiêu model và tính consensus
         Sú dung GPT-4o (OpenAI) và Claude-3.5 (Anthropic) cho true multi-vendor evaluation
         """
-        judge_results = {}
-        
-        for model in models:
+        # Instantiate one judge per model then run all in parallel
+        temp_judges = {model: LLMJudge(model=model) for model in models}
+
+        async def _run_judge(model: str, judge: "LLMJudge"):
             try:
-                # Tạo judge với model khác
-                temp_judge = LLMJudge(model=model)
-                result = await temp_judge.evaluate_comprehensive(
-                    question, answer, ground_truth, context
-                )
-                judge_results[model] = result
+                return model, await judge.evaluate_comprehensive(question, answer, ground_truth, context)
             except Exception as e:
-                # Nếu một model thất bại, ghi lại lỗi và tiếp tục
-                judge_results[model] = {
+                return model, {
                     "final_score": 1.0,
                     "error": f"Model {model} failed: {str(e)}",
-                    "detailed_scores": {"error": {"score": 1, "reasoning": str(e)}}
+                    "detailed_scores": {"error": {"score": 1, "reasoning": str(e)}},
                 }
-        
+
+        pairs = await asyncio.gather(*[_run_judge(m, j) for m, j in temp_judges.items()])
+        judge_results = dict(pairs)
+
+        # Aggregate token usage across all judge models
+        token_usage: Dict[str, Any] = {"by_model": {}, "total_input_tokens": 0, "total_output_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0}
+        for model, judge in temp_judges.items():
+            usage = judge.get_usage()
+            token_usage["by_model"][model] = usage
+            token_usage["total_input_tokens"] += usage["input_tokens"]
+            token_usage["total_output_tokens"] += usage["output_tokens"]
+            token_usage["total_tokens"] += usage["total_tokens"]
+            token_usage["total_cost_usd"] += usage["cost_usd"]
+        token_usage["total_cost_usd"] = round(token_usage["total_cost_usd"], 6)
+
         # Tính agreement rate (chỉ tính các model thành công)
         successful_scores = [r["final_score"] for r in judge_results.values() if "error" not in r]
         if not successful_scores:
@@ -334,17 +374,18 @@ Trả về JSON format:
                 "agreement_rate": 0.0,
                 "individual_results": judge_results,
                 "consensus": "failed",
-                "error": "Tất cả models đều thất bại"
+                "token_usage": token_usage,
+                "error": "Tất cả models đều thất bại",
             }
-        
+
         avg_score = sum(successful_scores) / len(successful_scores)
-        
+
         # Tính độ đồng thuận nâng cao
         agreement = self._calculate_agreement(successful_scores)
-        
+
         # Tính Cohen's Kappa cho reliability
         kappa = self._calculate_cohen_kappa(successful_scores) if len(successful_scores) >= 2 else 0.0
-        
+
         return {
             "final_score": avg_score,
             "agreement_rate": agreement,
@@ -353,7 +394,8 @@ Trả về JSON format:
             "consensus": "high" if agreement > 0.8 else "medium" if agreement > 0.5 else "low",
             "reliability": "excellent" if kappa > 0.8 else "good" if kappa > 0.6 else "moderate" if kappa > 0.4 else "poor",
             "successful_models": len(successful_scores),
-            "total_models": len(models)
+            "total_models": len(models),
+            "token_usage": token_usage,
         }
 
     async def check_position_bias(self, response_a: str, response_b: str, question: str) -> Dict[str, Any]:

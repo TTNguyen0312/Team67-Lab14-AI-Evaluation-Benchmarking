@@ -2,10 +2,10 @@ import asyncio
 import json
 import os
 import time
+from typing import Dict, Any
 from engine.runner import BenchmarkRunner
 from engine.llm_judge import LLMJudge
 from agent.main_agent import MainAgent
-from engine.llm_judge import LLMJudge
 
 
 async def run_benchmark_with_results(agent_version: str):
@@ -32,6 +32,23 @@ async def run_benchmark_with_results(agent_version: str):
     total = len(results)
     pass_count = sum(1 for r in results if r["status"] == "pass")
 
+    # Aggregate token usage across all test cases
+    agg_tokens: Dict[str, Any] = {"total_input_tokens": 0, "total_output_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0, "by_model": {}}
+    for r in results:
+        tu = r.get("token_usage", {})
+        agg_tokens["total_input_tokens"] += tu.get("total_input_tokens", 0)
+        agg_tokens["total_output_tokens"] += tu.get("total_output_tokens", 0)
+        agg_tokens["total_tokens"] += tu.get("total_tokens", 0)
+        agg_tokens["total_cost_usd"] += tu.get("total_cost_usd", 0.0)
+        for model, usage in tu.get("by_model", {}).items():
+            if model not in agg_tokens["by_model"]:
+                agg_tokens["by_model"][model] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+            agg_tokens["by_model"][model]["input_tokens"] += usage.get("input_tokens", 0)
+            agg_tokens["by_model"][model]["output_tokens"] += usage.get("output_tokens", 0)
+            agg_tokens["by_model"][model]["total_tokens"] += usage.get("total_tokens", 0)
+            agg_tokens["by_model"][model]["cost_usd"] += usage.get("cost_usd", 0.0)
+    agg_tokens["total_cost_usd"] = round(agg_tokens["total_cost_usd"], 6)
+
     summary = {
         "metadata": {
             "version": agent_version,
@@ -45,6 +62,7 @@ async def run_benchmark_with_results(agent_version: str):
             "agreement_rate": sum(r["judge"].get("agreement_rate", 0) for r in results) / total,
             "pass_rate": pass_count / total,
         },
+        "token_usage": agg_tokens,
     }
     return results, summary
 
