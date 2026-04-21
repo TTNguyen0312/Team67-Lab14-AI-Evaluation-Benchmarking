@@ -1,0 +1,23 @@
+{
+  "decision": "APPROVE",
+  "checks": [
+    {
+      "name": "Quality Gate",
+      "threshold": "avg_score delta >= -0.5",
+      "delta": 0.1733,
+      "passed": true
+    },
+    {
+      "name": "Retrieval Gate",
+      "threshold": "hit_rate delta >= -0.05",
+      "delta": 0.28,
+      "passed": true
+    },
+    {
+      "name": "Pass Rate Gate",
+      "threshold": "pass_rate delta >= -0.05",
+      "delta": 0.02,
+      "passed": true
+    }
+  ]
+}

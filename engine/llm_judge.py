@@ -303,7 +303,7 @@ Trả về JSON format:
         return summary
 
     async def evaluate_multi_judge(self, question: str, answer: str, ground_truth: str, 
-                                  context: str = "", models: List[str] = ["gpt-4o", "claude-3-5-sonnet-20241022"]) -> Dict[str, Any]:
+                                  context: str = "", models: List[str] = ["gpt-4o", "gpt-4.1"]) -> Dict[str, Any]:
         """
         Multi-Judge: Gói nhiêu model và tính consensus
         Sú dung GPT-4o (OpenAI) và Claude-3.5 (Anthropic) cho true multi-vendor evaluation
