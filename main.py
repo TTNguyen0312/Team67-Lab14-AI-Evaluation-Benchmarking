@@ -55,6 +55,41 @@ async def run_benchmark(version):
     _, summary = await run_benchmark_with_results(version)
     return summary
 
+def release_gate(v1_summary, v2_summary):
+    """Release Gate tu dong — quyet dinh APPROVE/BLOCK."""
+    m1, m2 = v1_summary["metrics"], v2_summary["metrics"]
+
+    checks = [
+        ("Quality Gate", "avg_score delta >= -0.5",
+         m2["avg_score"] - m1["avg_score"],
+         m2["avg_score"] - m1["avg_score"] >= -0.5),
+        ("Retrieval Gate", "hit_rate delta >= -0.05",
+         m2["hit_rate"] - m1["hit_rate"],
+         m2["hit_rate"] - m1["hit_rate"] >= -0.05),
+        ("Pass Rate Gate", "pass_rate delta >= -0.05",
+         m2["pass_rate"] - m1["pass_rate"],
+         m2["pass_rate"] - m1["pass_rate"] >= -0.05),
+    ]
+
+    print(f"\n{'='*55}")
+    print(f"  RELEASE GATE")
+    print(f"{'='*55}")
+    all_pass = True
+    for name, threshold, delta, passed in checks:
+        status = "PASS" if passed else "FAIL"
+        if not passed:
+            all_pass = False
+        print(f"  [{status}] {name}: {threshold} (actual: {delta:+.4f})")
+
+    decision = "APPROVE" if all_pass else "BLOCK"
+    print(f"\n  >>> DECISION: {decision} <<<")
+    print(f"{'='*55}")
+
+    return {
+        "decision": decision,
+        "checks": [{"name": c[0], "threshold": c[1], "delta": round(c[2], 4), "passed": c[3]} for c in checks],
+    }
+
 async def main():
     v1_summary = await run_benchmark("Agent_V1_Base")
     
