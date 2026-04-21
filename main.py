@@ -106,8 +106,10 @@ def release_gate(v1_summary, v2_summary):
 
 
 async def main():
-    v1_results, v1_summary = await run_benchmark_with_results("Agent_V1_Base")
-    v2_results, v2_summary = await run_benchmark_with_results("Agent_V2_Optimized")
+    (v1_results, v1_summary), (v2_results, v2_summary) = await asyncio.gather(
+        run_benchmark_with_results("Agent_V1_Base"),
+        run_benchmark_with_results("Agent_V2_Optimized"),
+    )
 
     if not v1_summary or not v2_summary:
         print("Không thể chạy Benchmark. Kiểm tra lại data/golden_set.jsonl.")
@@ -127,6 +129,8 @@ async def main():
         json.dump(v1_summary, f, ensure_ascii=False, indent=2)
     with open("reports/summary.json", "w", encoding="utf-8") as f:
         json.dump(v2_summary, f, ensure_ascii=False, indent=2)
+    with open("reports/v1_benchmark_results.json", "w", encoding="utf-8") as f:
+        json.dump(v1_results, f, ensure_ascii=False, indent=2)
     with open("reports/benchmark_results.json", "w", encoding="utf-8") as f:
         json.dump(v2_results, f, ensure_ascii=False, indent=2)
     with open("reports/release_gate.json", "w", encoding="utf-8") as f:

@@ -4,7 +4,7 @@
     {
       "name": "Quality Gate",
       "threshold": "avg_score delta >= -0.5",
-      "delta": 0.0075,
+      "delta": 0.2283,
       "passed": true
     },
     {
@@ -16,7 +16,7 @@
     {
       "name": "Pass Rate Gate",
       "threshold": "pass_rate delta >= -0.05",
-      "delta": -0.04,
+      "delta": 0.04,
       "passed": true
     }
   ]
