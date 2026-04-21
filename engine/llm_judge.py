@@ -7,7 +7,19 @@ import os
 class LLMJudge:
     def __init__(self, model: str = "gpt-4o"):
         self.model = model
-        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        # Kiểm tra và lấy API key một cách an toàn
+        from dotenv import load_dotenv
+        load_dotenv()  # Load từ file .env
+        
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY không tìm thấy trong .env hoặc environment variables. Hãy tạo file .env với OPENAI_API_KEY=your_key_here")
+        
+        try:
+            self.client = AsyncOpenAI(api_key=api_key)
+        except Exception as e:
+            raise ValueError(f"Không thể khởi tạo OpenAI client: {str(e)}")
         
         # Prompt templates cho từng loại đánh giá
         self.prompts = {
@@ -161,13 +173,31 @@ Trả về JSON format:
                     {"role": "system", "content": "Bạn là chuyên gia đánh giá AI. Luôn trả về JSON hợp lệ."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.1
+                temperature=0.1,
+                max_tokens=1000  # Giới hạn tokens để tránh cost cao
             )
             
             content = response.choices[0].message.content
-            return json.loads(content)
+            if not content:
+                return {"error": "Empty response from LLM", "score": 1, "reasoning": "LLM trả về response rỗng"}
+            
+            # Thử parse JSON với error handling
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as e:
+                return {"error": f"Invalid JSON response: {str(e)}", "score": 1, "reasoning": f"LLM trả về JSON không hợp lệ: {content[:200]}..."}
+                
         except Exception as e:
-            return {"error": str(e), "score": 1, "reasoning": f"LLM call failed: {str(e)}"}
+            # Xử lý các loại lỗi khác nhau
+            error_msg = str(e)
+            if "API key" in error_msg.lower():
+                return {"error": "API key invalid hoặc hết hạn", "score": 1, "reasoning": "Kiểm tra lại OPENAI_API_KEY"}
+            elif "rate" in error_msg.lower():
+                return {"error": "Rate limit exceeded", "score": 1, "reasoning": "Vượt quá giới hạn request, thử lại sau"}
+            elif "connection" in error_msg.lower():
+                return {"error": "Connection error", "score": 1, "reasoning": "Lỗi kết nối đến OpenAI API"}
+            else:
+                return {"error": error_msg, "score": 1, "reasoning": f"LLM call failed: {error_msg}"}
     
     async def evaluate_comprehensive(self, question: str, answer: str, ground_truth: str = "", 
                                   context: str = "", previous_answer: str = "") -> Dict[str, Any]:
@@ -241,34 +271,54 @@ Trả về JSON format:
         return summary
 
     async def evaluate_multi_judge(self, question: str, answer: str, ground_truth: str, 
-                                  context: str = "", models: List[str] = ["gpt-4o", "claude-3-5-sonnet-20241022"]) -> Dict[str, Any]:
+                                  context: str = "", models: List[str] = ["gpt-4o", "gpt-4o-mini"]) -> Dict[str, Any]:
         """
         Multi-Judge: Gọi nhiều model và tính consensus
+        Sử dụng các model OpenAI khác nhau để tránh dependency bên ngoài
         """
         judge_results = {}
         
         for model in models:
-            # Tạo judge với model khác
-            temp_judge = LLMJudge(model=model)
-            result = await temp_judge.evaluate_comprehensive(
-                question, answer, ground_truth, context
-            )
-            judge_results[model] = result
+            try:
+                # Tạo judge với model khác
+                temp_judge = LLMJudge(model=model)
+                result = await temp_judge.evaluate_comprehensive(
+                    question, answer, ground_truth, context
+                )
+                judge_results[model] = result
+            except Exception as e:
+                # Nếu một model thất bại, ghi lại lỗi và tiếp tục
+                judge_results[model] = {
+                    "final_score": 1.0,
+                    "error": f"Model {model} failed: {str(e)}",
+                    "detailed_scores": {"error": {"score": 1, "reasoning": str(e)}}
+                }
         
-        # Tính agreement rate
-        scores = [r["final_score"] for r in judge_results.values()]
-        avg_score = sum(scores) / len(scores)
+        # Tính agreement rate (chỉ tính các model thành công)
+        successful_scores = [r["final_score"] for r in judge_results.values() if "error" not in r]
+        if not successful_scores:
+            return {
+                "final_score": 1.0,
+                "agreement_rate": 0.0,
+                "individual_results": judge_results,
+                "consensus": "failed",
+                "error": "Tất cả models đều thất bại"
+            }
+        
+        avg_score = sum(successful_scores) / len(successful_scores)
         
         # Tính độ đồng thuận (nếu scores gần nhau thì đồng thuận cao)
-        max_score = max(scores)
-        min_score = min(scores)
+        max_score = max(successful_scores)
+        min_score = min(successful_scores)
         agreement = 1.0 - (max_score - min_score) / 4.0  # Normalize to 0-1
         
         return {
             "final_score": avg_score,
             "agreement_rate": agreement,
             "individual_results": judge_results,
-            "consensus": "high" if agreement > 0.8 else "medium" if agreement > 0.5 else "low"
+            "consensus": "high" if agreement > 0.8 else "medium" if agreement > 0.5 else "low",
+            "successful_models": len(successful_scores),
+            "total_models": len(models)
         }
 
     async def check_position_bias(self, response_a: str, response_b: str, question: str) -> Dict[str, Any]:
