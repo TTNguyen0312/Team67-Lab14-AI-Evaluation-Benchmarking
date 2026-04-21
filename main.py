@@ -4,6 +4,7 @@ import os
 import time
 from engine.runner import BenchmarkRunner
 from agent.main_agent import MainAgent
+from engine.llm_judge import LLMJudge
 
 # Giả lập các components Expert
 class ExpertEvaluator:
@@ -15,13 +16,20 @@ class ExpertEvaluator:
             "retrieval": {"hit_rate": 1.0, "mrr": 0.5}
         }
 
-class MultiModelJudge:
-    async def evaluate_multi_judge(self, q, a, gt): 
-        return {
-            "final_score": 4.5, 
-            "agreement_rate": 0.8,
-            "reasoning": "Cả 2 model đồng ý đây là câu trả lời tốt."
-        }
+# Real Multi-Judge implementation
+class RealMultiJudge:
+    def __init__(self):
+        self.llm_judge = LLMJudge()
+    
+    async def evaluate_multi_judge(self, question, answer, ground_truth, context=""):
+        """Use real LLMJudge with multi-model consensus"""
+        result = await self.llm_judge.evaluate_multi_judge(
+            question=question,
+            answer=answer, 
+            ground_truth=ground_truth,
+            context=context
+        )
+        return result
 
 async def run_benchmark_with_results(agent_version: str):
     print(f"🚀 Khởi động Benchmark cho {agent_version}...")
@@ -37,7 +45,7 @@ async def run_benchmark_with_results(agent_version: str):
         print("❌ File data/golden_set.jsonl rỗng. Hãy tạo ít nhất 1 test case.")
         return None, None
 
-    runner = BenchmarkRunner(MainAgent(), ExpertEvaluator(), MultiModelJudge())
+    runner = BenchmarkRunner(MainAgent(), ExpertEvaluator(), RealMultiJudge())
     results = await runner.run_all(dataset)
 
     total = len(results)
