@@ -5,7 +5,6 @@ import time
 from typing import Dict, Any
 from engine.runner import BenchmarkRunner
 from engine.llm_judge import LLMJudge
-<<<<<<< HEAD
 from engine.retrieval_eval import RetrievalEvaluator
 from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy, context_recall, context_precision
@@ -120,10 +119,6 @@ class RealMultiJudge:
             context=context
         )
         return result
-=======
-from agent.main_agent import MainAgent
-
->>>>>>> 5ab1b99b7ee3bbf18bf3902f09d47bcef6150be1
 
 async def run_benchmark_with_results(agent_version: str):
     print(f"Khởi động Benchmark cho {agent_version}...")
@@ -139,15 +134,7 @@ async def run_benchmark_with_results(agent_version: str):
         print("File data/golden_set.jsonl rỗng. Hãy tạo ít nhất 1 test case.")
         return None, None
 
-<<<<<<< HEAD
     runner = BenchmarkRunner(MainAgent(), RealRAGASEvaluator(), RealMultiJudge())
-=======
-    version = "v2" if "V2" in agent_version else "v1"
-    agent = MainAgent(version=version)
-    judge = LLMJudge()
-
-    runner = BenchmarkRunner(agent, judge)
->>>>>>> 5ab1b99b7ee3bbf18bf3902f09d47bcef6150be1
     results = await runner.run_all(dataset)
 
     total = len(results)
