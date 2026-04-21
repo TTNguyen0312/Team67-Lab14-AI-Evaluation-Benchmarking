@@ -3,23 +3,32 @@ import json
 from typing import Dict, Any, List
 from openai import AsyncOpenAI
 import os
+import numpy as np
+try:
+    from anthropic import AsyncAnthropic
+except ImportError:
+    AsyncAnthropic = None
 
 class LLMJudge:
     def __init__(self, model: str = "gpt-4o"):
         self.model = model
         
-        # Kiểm tra và lấy API key một cách an toàn
+        # Load environment variables
         from dotenv import load_dotenv
-        load_dotenv()  # Load từ file .env
+        load_dotenv()
         
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY không tìm thấy trong .env hoặc environment variables. Hãy tạo file .env với OPENAI_API_KEY=your_key_here")
+        # Initialize OpenAI client
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if not openai_key:
+            raise ValueError("OPENAI_API_KEY không tìm thấy. Hãy tạo file .env với OPENAI_API_KEY=your_key_here")
+        self.openai_client = AsyncOpenAI(api_key=openai_key)
         
-        try:
-            self.client = AsyncOpenAI(api_key=api_key)
-        except Exception as e:
-            raise ValueError(f"Không thể khởi tạo OpenAI client: {str(e)}")
+        # Initialize Anthropic client for Claude
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+        if anthropic_key and AsyncAnthropic:
+            self.anthropic_client = AsyncAnthropic(api_key=anthropic_key)
+        else:
+            self.anthropic_client = None
         
         # Prompt templates cho từng loại đánh giá
         self.prompts = {
@@ -167,35 +176,58 @@ Trả về JSON format:
     async def _call_llm(self, prompt: str) -> Dict[str, Any]:
         """Gọi LLM và parse kết quả JSON"""
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "Bạn là chuyên gia đánh giá AI. Luôn trả về JSON hợp lệ."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=1000  # Giới hạn tokens để tránh cost cao
-            )
+            if self.model.startswith("gpt"):
+                # OpenAI models
+                response = await self.openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "Bạn là chuyên gia đánh giá AI. Luôn trả về JSON hợp lệ."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=1000
+                )
+                content = response.choices[0].message.content
+            elif self.model.startswith("claude") and self.anthropic_client:
+                # Anthropic models
+                response = await self.anthropic_client.messages.create(
+                    model=self.model,
+                    max_tokens=1000,
+                    temperature=0.1,
+                    system="Bạn là chuyên gia đánh giá AI. Luôn trả về JSON hợp lệ.",
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                content = response.content[0].text if response.content else ""
+            else:
+                return {"error": f"Model {self.model} không được hỗ trợ hoặc thiếu API key", "score": 1, "reasoning": "Kiểm tra lại model và API keys"}
             
-            content = response.choices[0].message.content
             if not content:
                 return {"error": "Empty response from LLM", "score": 1, "reasoning": "LLM trả về response rỗng"}
             
-            # Thử parse JSON với error handling
+            # Parse JSON với error handling
             try:
                 return json.loads(content)
             except json.JSONDecodeError as e:
+                # Thử extract JSON từ content
+                import re
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    try:
+                        return json.loads(json_match.group())
+                    except:
+                        pass
                 return {"error": f"Invalid JSON response: {str(e)}", "score": 1, "reasoning": f"LLM trả về JSON không hợp lệ: {content[:200]}..."}
                 
         except Exception as e:
-            # Xử lý các loại lỗi khác nhau
             error_msg = str(e)
-            if "API key" in error_msg.lower():
-                return {"error": "API key invalid hoặc hết hạn", "score": 1, "reasoning": "Kiểm tra lại OPENAI_API_KEY"}
+            if "API key" in error_msg.lower() or "anthropic" in error_msg.lower():
+                return {"error": "API key invalid hoặc hết hạn", "score": 1, "reasoning": "Kiểm tra lại OPENAI_API_KEY và ANTHROPIC_API_KEY"}
             elif "rate" in error_msg.lower():
                 return {"error": "Rate limit exceeded", "score": 1, "reasoning": "Vượt quá giới hạn request, thử lại sau"}
             elif "connection" in error_msg.lower():
-                return {"error": "Connection error", "score": 1, "reasoning": "Lỗi kết nối đến OpenAI API"}
+                return {"error": "Connection error", "score": 1, "reasoning": "Lỗi kết nối đến API"}
             else:
                 return {"error": error_msg, "score": 1, "reasoning": f"LLM call failed: {error_msg}"}
     
@@ -271,10 +303,10 @@ Trả về JSON format:
         return summary
 
     async def evaluate_multi_judge(self, question: str, answer: str, ground_truth: str, 
-                                  context: str = "", models: List[str] = ["gpt-4o", "gpt-4o-mini"]) -> Dict[str, Any]:
+                                  context: str = "", models: List[str] = ["gpt-4o", "claude-3-5-sonnet-20241022"]) -> Dict[str, Any]:
         """
-        Multi-Judge: Gọi nhiều model và tính consensus
-        Sử dụng các model OpenAI khác nhau để tránh dependency bên ngoài
+        Multi-Judge: Gói nhiêu model và tính consensus
+        Sú dung GPT-4o (OpenAI) và Claude-3.5 (Anthropic) cho true multi-vendor evaluation
         """
         judge_results = {}
         
@@ -307,16 +339,19 @@ Trả về JSON format:
         
         avg_score = sum(successful_scores) / len(successful_scores)
         
-        # Tính độ đồng thuận (nếu scores gần nhau thì đồng thuận cao)
-        max_score = max(successful_scores)
-        min_score = min(successful_scores)
-        agreement = 1.0 - (max_score - min_score) / 4.0  # Normalize to 0-1
+        # Tính độ đồng thuận nâng cao
+        agreement = self._calculate_agreement(successful_scores)
+        
+        # Tính Cohen's Kappa cho reliability
+        kappa = self._calculate_cohen_kappa(successful_scores) if len(successful_scores) >= 2 else 0.0
         
         return {
             "final_score": avg_score,
             "agreement_rate": agreement,
+            "cohen_kappa": kappa,
             "individual_results": judge_results,
             "consensus": "high" if agreement > 0.8 else "medium" if agreement > 0.5 else "low",
+            "reliability": "excellent" if kappa > 0.8 else "good" if kappa > 0.6 else "moderate" if kappa > 0.4 else "poor",
             "successful_models": len(successful_scores),
             "total_models": len(models)
         }
@@ -337,3 +372,58 @@ Trả về JSON format:
             "score_difference": abs(result1["final_score"] - result2["final_score"]),
             "recommendation": "Consider using blind evaluation" if abs(result1["final_score"] - result2["final_score"]) > 0.5 else "No significant bias detected"
         }
+    
+    def _calculate_agreement(self, scores: List[float]) -> float:
+        """Tính độ đồng thuận giữa các judges"""
+        if len(scores) < 2:
+            return 1.0
+        
+        # Simple agreement: 1 - (max_diff / max_possible_diff)
+        max_score = max(scores)
+        min_score = min(scores)
+        max_possible_diff = 4.0  # 5-1
+        agreement = 1.0 - (max_score - min_score) / max_possible_diff
+        return max(0.0, min(1.0, agreement))
+    
+    def _calculate_cohen_kappa(self, scores: List[float]) -> float:
+        """Tính Cohen's Kappa cho inter-rater reliability"""
+        if len(scores) < 2:
+            return 0.0
+        
+        # Convert scores to categories (1-5 scale)
+        categories = [int(score) for score in scores]
+        
+        # Simple kappa calculation for demonstration
+        # In practice, this would be more sophisticated
+        n = len(categories)
+        if n == 2:
+            # For 2 raters
+            observed_agreement = 1.0 if categories[0] == categories[1] else 0.0
+            # Expected agreement by chance
+            from collections import Counter
+            counter = Counter(categories)
+            total = sum(counter.values())
+            expected_agreement = sum((count/total)**2 for count in counter.values())
+            
+            if expected_agreement == 1.0:
+                return 1.0
+            
+            kappa = (observed_agreement - expected_agreement) / (1.0 - expected_agreement)
+            return max(-1.0, min(1.0, kappa))
+        else:
+            # For multiple raters, use Fleiss' Kappa approximation
+            from collections import Counter
+            category_counts = Counter(categories)
+            total_ratings = len(categories)
+            
+            # Observed agreement
+            observed = sum(count * (count - 1) for count in category_counts.values()) / (total_ratings * (total_ratings - 1))
+            
+            # Expected agreement
+            expected = sum((count / total_ratings) ** 2 for count in category_counts.values())
+            
+            if expected == 1.0:
+                return 1.0
+            
+            kappa = (observed - expected) / (1.0 - expected)
+            return max(-1.0, min(1.0, kappa))
