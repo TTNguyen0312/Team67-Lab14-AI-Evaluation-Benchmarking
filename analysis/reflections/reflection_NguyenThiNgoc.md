@@ -67,6 +67,18 @@
 - **Giải pháp:** Real-time token counting + pricing matrix
 - **Kết quả:** Detailed cost reports với optimization suggestions
 
+### 4. Judge Reliability Verification
+- **Vấn đề:** Judge LLM cung có thể sai trong đánh giá
+- **Giải pháp:** Manual spot check để tránh đánh giá sai
+- **Kết quả:** 
+  - Verify 10+ random cases để ensure accuracy
+  - Cross-check judge scoring với expected outcomes
+  - **Prompt adjustments implemented:**
+    - Added system message: *"Você là chuyên gia đánh giá AI. Luôn trả về JSON hợp lệ."*
+    - Set temperature=0.1 để reduce variability
+    - Added rubrics detail trong `self.rubrics` dictionary
+    - Enhanced JSON parsing với regex fallback
+
 ## 📊 Metrics đạt được
 - **Multi-Judge Consensus:** 15/15 điểm ✅
 - **Retrieval Evaluation:** 10/10 điểm ✅  
@@ -79,8 +91,55 @@
 3. **Cost tracking** critical cho real-world AI applications
 4. **Consensus algorithms** improve evaluation reliability significantly
 5. **RAGAS metrics** provide comprehensive retrieval assessment
+6. **Judge reliability verification** essential - manual spot check needed to avoid evaluation bias
 
-## 🔮 Future Improvements
+## � Phân tích nguyên nhân V2 > V1 (Bước 13)
+
+### Tại sao V2 tốt hơn V1?
+Dựa vào kết quả benchmark thực tế:
+- **avg_score**: V1=4.11 - V2=4.28 (+0.17)
+- **hit_rate**: V1=0.50 - V2=0.78 (+0.28)  
+- **mrr**: V1=0.50 - V2=0.70 (+0.20)
+- **pass_rate**: V1=0.96 - V2=0.98 (+0.02)
+
+### Tốt ở đâu?
+1. **Retrieval Improvement**: Hit Rate tăng 56% (0.50 - 0.78)
+   - V2 dùng vector search thay vì keyword-based
+   - Tìm kiếm semantic hiệu rõ câu "Why" và reasoning
+   
+2. **Generation Quality**: Score tăng 4.1%
+   - Prompt tốt hơn trong V2
+   - Reduced hallucination qua better context grounding
+   
+3. **Multi-Judge Reliability**: Agreement Rate tăng 2.1%
+   - V2 dùng gpt-4o + gpt-4.1 thay vì gpt-4o + Claude
+   - Consistent scoring giữa các models
+
+### Rủi ro còn gì?
+1. **Cost Increase**: 
+   - V2 dùng 2 OpenAI models thay vì 1 OpenAI + 1 Anthropic
+   - Token usage cao hơn do retrieval phức tạp hơn
+   
+2. **Latency Trade-off**:
+   - Vector search chậm hơn keyword search
+   - Multi-judge consensus tăng processing time
+   
+3. **Complexity**:
+   - System phức tạp hơn khó debug
+   - Nhiều components có thể fail
+
+### Root Cause Analysis
+**V2 tốt hơn vì**:
+- **Retrieval Strategy**: Vector semantic search > Keyword exact match
+- **Model Selection**: Same vendor (OpenAI) > Cross-vendor (OpenAI+Anthropic) cho consistency
+- **Prompt Engineering**: Better instruction following trong V2
+
+**Trade-offs accepted**:
+- Chi phí tăng nhưng quality tăng
+- Latency tăng nhưng accuracy tăng  
+- Complexity tăng nhưng reliability tăng
+
+## �🔮 Future Improvements
 - Add more sophisticated rubrics (clarity, completeness)
 - Integrate real vector DB thay vì simulated retrieval
 - Add automated test coverage cho LLMJudge
