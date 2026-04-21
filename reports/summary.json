@@ -2,11 +2,33 @@
   "metadata": {
     "version": "Agent_V2_Optimized",
     "total": 50,
-    "timestamp": "2026-04-21 16:39:22"
+    "timestamp": "2026-04-21 17:51:49"
   },
   "metrics": {
-    "avg_score": 4.5,
-    "hit_rate": 1.0,
-    "agreement_rate": 0.8
+    "avg_score": 3.575,
+    "hit_rate": 0.78,
+    "mrr": 0.6966666666666668,
+    "agreement_rate": 0.8683333333333333,
+    "pass_rate": 0.7
+  },
+  "token_usage": {
+    "total_input_tokens": 120270,
+    "total_output_tokens": 37146,
+    "total_tokens": 157416,
+    "total_cost_usd": 0.605138,
+    "by_model": {
+      "gpt-4o": {
+        "input_tokens": 61613,
+        "output_tokens": 18312,
+        "total_tokens": 79925,
+        "cost_usd": 0.3371519999999999
+      },
+      "gpt-4.1": {
+        "input_tokens": 58657,
+        "output_tokens": 18834,
+        "total_tokens": 77491,
+        "cost_usd": 0.26798599999999995
+      }
+    }
   }
 }
