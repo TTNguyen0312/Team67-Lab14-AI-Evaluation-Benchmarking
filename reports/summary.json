@@ -1,34 +1,70 @@
-{
-  "metadata": {
-    "version": "Agent_V2_Optimized",
-    "total": 50,
-    "timestamp": "2026-04-21 17:51:49"
-  },
-  "metrics": {
-    "avg_score": 3.575,
-    "hit_rate": 0.78,
-    "mrr": 0.6966666666666668,
-    "agreement_rate": 0.8683333333333333,
-    "pass_rate": 0.7
-  },
-  "token_usage": {
-    "total_input_tokens": 120270,
-    "total_output_tokens": 37146,
-    "total_tokens": 157416,
-    "total_cost_usd": 0.605138,
-    "by_model": {
-      "gpt-4o": {
-        "input_tokens": 61613,
-        "output_tokens": 18312,
-        "total_tokens": 79925,
-        "cost_usd": 0.3371519999999999
-      },
-      "gpt-4.1": {
-        "input_tokens": 58657,
-        "output_tokens": 18834,
-        "total_tokens": 77491,
-        "cost_usd": 0.26798599999999995
-      }
+[
+    {
+    "metadata": {
+        "version": "Agent_V1_Base",
+        "total": 50,
+        "timestamp": "2026-04-21 17:51:27"
+    },
+    "metrics": {
+        "avg_score": 3.3466666666666667,
+        "hit_rate": 0.5,
+        "mrr": 0.5,
+        "agreement_rate": 0.8941666666666667,
+        "pass_rate": 0.66
+    },
+    "token_usage": {
+        "total_input_tokens": 99886,
+        "total_output_tokens": 35739,
+        "total_tokens": 135625,
+        "total_cost_usd": 0.545941,
+        "by_model": {
+        "gpt-4o": {
+            "input_tokens": 48968,
+            "output_tokens": 17887,
+            "total_tokens": 66855,
+            "cost_usd": 0.3012890000000001
+        },
+        "gpt-4.1": {
+            "input_tokens": 50918,
+            "output_tokens": 17852,
+            "total_tokens": 68770,
+            "cost_usd": 0.24465199999999998
+        }
+        }
     }
-  }
-}
+    },
+    {
+        "metadata": {
+            "version": "Agent_V2_Optimized",
+            "total": 50,
+            "timestamp": "2026-04-21 17:51:49"
+        },
+        "metrics": {
+            "avg_score": 3.575,
+            "hit_rate": 0.78,
+            "mrr": 0.6966666666666668,
+            "agreement_rate": 0.8683333333333333,
+            "pass_rate": 0.7
+        },
+        "token_usage": {
+            "total_input_tokens": 120270,
+            "total_output_tokens": 37146,
+            "total_tokens": 157416,
+            "total_cost_usd": 0.605138,
+            "by_model": {
+            "gpt-4o": {
+                "input_tokens": 61613,
+                "output_tokens": 18312,
+                "total_tokens": 79925,
+                "cost_usd": 0.3371519999999999
+            },
+            "gpt-4.1": {
+                "input_tokens": 58657,
+                "output_tokens": 18834,
+                "total_tokens": 77491,
+                "cost_usd": 0.26798599999999995
+            }
+            }
+        }
+    }
+]
