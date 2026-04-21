@@ -1,0 +1,7 @@
+Generated per category:
+  regular     : 20 
+  adversarial : 10     
+  edge        : 12    
+  multiturn   : 5      
+  technical   : 3    
+  TOTAL       : 50
